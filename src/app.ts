@@ -2,23 +2,26 @@ import { randomUUID } from "node:crypto";
 
 import type { CliRenderer, KeyEvent } from "@opentui/core";
 
-import { saveState } from "./storage.ts";
-import { tasksByStatus, truncate } from "./tasks.ts";
+import { appendHistory, archiveExpired, loadHistory, saveState } from "./storage.ts";
+import { startOfDay, tasksByStatus, truncate } from "./tasks.ts";
 import { COLUMNS } from "./theme.ts";
 import { STATUSES, type BoardState, type Status, type Task } from "./types.ts";
-import { ArchiveView } from "./ui/archive.ts";
 import { BoardView, type BoardSelection } from "./ui/board.ts";
 import { ConfirmView } from "./ui/confirm.ts";
 import { DetailView } from "./ui/detail.ts";
 import { TaskForm } from "./ui/form.ts";
 import { HelpView } from "./ui/help.ts";
+import { HistoryView } from "./ui/history.ts";
 
-type Mode = "board" | "form" | "detail" | "confirm" | "help" | "archive";
+type Mode = "board" | "form" | "detail" | "confirm" | "help" | "history";
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
+/** Re-check the archive window roughly every 5 min; only sweeps on day rollover. */
+const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+
 const BOARD_HINTS =
-  "a add · e edit · ⏎ view · d delete · arrows/hjkl navigate · ⇧+arrows (or H/L/J/K) move the task · Space advance · A archive · ? help · q quit";
+  "a add · e edit · ⏎ view · d delete · arrows/hjkl navigate · ⇧+arrows (or H/L/J/K) move the task · Space advance · A history · ? help · q quit";
 
 /**
  * Top-level controller: owns the board state, the current mode, and a single
@@ -35,12 +38,14 @@ export class KanbanApp {
   private form: TaskForm | null = null;
   private detail: DetailView | null = null;
   private help: HelpView | null = null;
-  private archive: ArchiveView | null = null;
+  private history: HistoryView | null = null;
   private confirm: ConfirmView | null = null;
 
   private formMode: "add" | "edit" = "add";
   private formTaskId: string | null = null;
   private contextTaskId: string | null = null; // task targeted by detail / confirm
+
+  private lastSweepDay: number;
 
   constructor(renderer: CliRenderer, state: BoardState) {
     this.renderer = renderer;
@@ -51,7 +56,23 @@ export class KanbanApp {
     renderer.keyInput.on("keypress", (key: KeyEvent) => this.onKey(key));
     renderer.on("resize", () => this.renderBoard());
 
+    // Long-running sessions still prune old done tasks at each local-midnight
+    // rollover (startup also sweeps once, in index.ts). Unref'd so it never
+    // keeps the process — or the test runner — alive on its own.
+    this.lastSweepDay = startOfDay();
+    setInterval(() => this.maybeSweep(), SWEEP_INTERVAL_MS).unref?.();
+
     this.renderBoard();
+  }
+
+  private maybeSweep(): void {
+    const today = startOfDay();
+    if (today === this.lastSweepDay) return;
+    this.lastSweepDay = today;
+    if (!archiveExpired(this.state)) return;
+    this.persist();
+    this.normalizeSelection();
+    if (this.mode === "board") this.renderBoard();
   }
 
   // ---------------------------------------------------------------- selection
@@ -122,13 +143,19 @@ export class KanbanApp {
           this.closeHelp();
         }
         break;
-      case "archive":
-        if (this.isClose(key)) {
-          key.preventDefault();
-          this.closeArchive();
-        }
+      case "history":
+        this.onHistoryKey(key);
         break;
     }
+  }
+
+  private onHistoryKey(key: KeyEvent): void {
+    if (!this.history) return;
+    const n = key.name ?? "";
+    if (this.isClose(key)) return this.handled(key, () => this.closeHistory());
+    if (n === "tab") return this.handled(key, () => this.history?.cycleRange());
+    if (n === "down" || n === "j") return this.handled(key, () => this.history?.scroll(1));
+    if (n === "up" || n === "k") return this.handled(key, () => this.history?.scroll(-1));
   }
 
   private isClose(key: KeyEvent): boolean {
@@ -156,7 +183,7 @@ export class KanbanApp {
     if (n === "g") return this.handled(key, () => this.jump(shift ? "end" : "home"));
 
     // Actions.
-    if (n === "a" && shift) return this.handled(key, () => this.openArchive());
+    if (n === "a" && shift) return this.handled(key, () => this.openHistory());
     if (n === "a" || n === "n") return this.handled(key, () => this.openForm("add"));
     if (n === "e") return this.handled(key, () => this.openForm("edit"));
     if (n === "return") return this.handled(key, () => this.openDetail());
@@ -198,8 +225,21 @@ export class KanbanApp {
     const was = task.status;
     task.status = status;
     task.updatedAt = now;
-    if (status === "done" && was !== "done") task.completedAt = now;
+    if (status === "done" && was !== "done") {
+      task.completedAt = now;
+      this.recordCompletion(task);
+    }
     if (status !== "done") delete task.completedAt;
+  }
+
+  /** Append a durable completion record so it survives pruning/edits/deletes. */
+  private recordCompletion(task: Task): void {
+    appendHistory({
+      taskId: task.id,
+      title: task.title,
+      description: task.description,
+      completedAt: task.completedAt ?? Date.now(),
+    });
   }
 
   private moveAcross(delta: number): void {
@@ -318,7 +358,10 @@ export class KanbanApp {
         createdAt: now,
         updatedAt: now,
       };
-      if (status === "done") task.completedAt = now;
+      if (status === "done") {
+        task.completedAt = now;
+        this.recordCompletion(task);
+      }
       this.state.tasks.push(task);
       this.selectTask(task.id);
     }
@@ -420,14 +463,15 @@ export class KanbanApp {
     this.renderBoard();
   }
 
-  private openArchive(): void {
-    this.archive = new ArchiveView(this.renderer, this.state.archived);
-    this.mode = "archive";
+  private openHistory(): void {
+    const boardDone = this.state.tasks.filter((t) => t.status === "done");
+    this.history = new HistoryView(this.renderer, boardDone, loadHistory());
+    this.mode = "history";
   }
 
-  private closeArchive(): void {
-    this.archive?.destroy();
-    this.archive = null;
+  private closeHistory(): void {
+    this.history?.destroy();
+    this.history = null;
     this.mode = "board";
     this.renderBoard();
   }

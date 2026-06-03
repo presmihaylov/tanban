@@ -14,7 +14,7 @@ export const BINDINGS: ReadonlyArray<readonly [string, string]> = [
   ["e", "Edit selected task"],
   ["Enter", "View task details"],
   ["d", "Delete selected task"],
-  ["A", "Toggle archived view"],
+  ["A", "Completed-work history"],
   ["?", "Toggle this help"],
   ["q / Ctrl+C", "Quit"],
 ];

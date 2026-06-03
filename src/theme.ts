@@ -1,11 +1,15 @@
 import type { Status } from "./types.ts";
 
-/** Column definitions in display order, each with its title and accent colour. */
+/**
+ * Column definitions in display order, each with its title and accent colour.
+ * Accents: orange (queued), cyan (active), green (in review), off-white (done).
+ * The `blocked` status id is kept for back-compat; only its label changed.
+ */
 export const COLUMNS: ReadonlyArray<{ status: Status; title: string; accent: string }> = [
-  { status: "todo", title: "TODO", accent: "#8b9cb8" },
-  { status: "in_progress", title: "IN PROGRESS", accent: "#4aa3ff" },
-  { status: "blocked", title: "BLOCKED", accent: "#ff6b6b" },
-  { status: "done", title: "DONE", accent: "#3fcf8e" },
+  { status: "todo", title: "TODO", accent: "#fd971f" },
+  { status: "in_progress", title: "IN PROGRESS", accent: "#66d9ef" },
+  { status: "blocked", title: "IN REVIEW", accent: "#a6e22e" },
+  { status: "done", title: "DONE", accent: "#e6e6dc" },
 ];
 
 export const accentFor = (status: Status): string =>
@@ -14,26 +18,26 @@ export const accentFor = (status: Status): string =>
 export const titleFor = (status: Status): string =>
   COLUMNS.find((c) => c.status === status)?.title ?? status;
 
-/** Centralised palette so the whole app stays visually consistent. */
+/** Centralised palette (classic Monokai) so the whole app stays consistent. */
 export const theme = {
-  background: "#16161e",
-  panel: "#1a1b26",
-  border: "#2a2c3a",
-  borderFocused: "#7aa2f7",
-  text: "#c0caf5",
-  textDim: "#565f89",
-  textMuted: "#414868",
-  brand: "#bb9af7",
-  /** Selected card: bright bar with dark text on top. */
-  selectionBg: "#7aa2f7",
-  selectionFg: "#16161e",
+  background: "#1e1f1c", // darkest, behind the columns
+  panel: "#272822", // classic Monokai background, the column fill
+  border: "#3e3d32",
+  borderFocused: "#66d9ef",
+  text: "#f8f8f2", // Monokai foreground
+  textDim: "#75715e", // Monokai comment grey
+  textMuted: "#49483e", // Monokai selection grey (unfocused selection bar)
+  brand: "#ae81ff", // Monokai purple
+  /** Selected card: a soft grey-white bar with dark, bold text on top (pi-style). */
+  selectionBg: "#d4d4dc",
+  selectionFg: "#1b1c18",
   /** Gray description preview shown under a card title, per background. */
-  descDim: "#6b7394", // on the dark panel (default)
-  descOnAccent: "#1d2c4d", // dark slate, readable on the bright selection bar
-  descOnMuted: "#aab2d8", // light gray, readable on the muted (unfocused) bar
-  modalBg: "#1f2030",
-  modalBorder: "#7aa2f7",
-  inputBg: "#24283b",
-  inputBgFocused: "#2f344d",
-  warn: "#e0af68",
+  descDim: "#75715e", // on the dark panel (default)
+  descOnAccent: "#3a3b34", // dark grey, readable on the light selection bar
+  descOnMuted: "#c8c4b0", // light grey, readable on the muted (unfocused) bar
+  modalBg: "#2d2e28",
+  modalBorder: "#66d9ef",
+  inputBg: "#3a3a32",
+  inputBgFocused: "#49483e",
+  warn: "#e6db74", // Monokai yellow
 } as const;

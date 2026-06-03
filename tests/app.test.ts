@@ -40,7 +40,7 @@ test("renders the four columns and the header", async () => {
   expect(frame).toContain("TANBAN");
   expect(frame).toContain("TODO");
   expect(frame).toContain("IN PROGRESS");
-  expect(frame).toContain("BLOCKED");
+  expect(frame).toContain("IN REVIEW");
   expect(frame).toContain("DONE");
 });
 

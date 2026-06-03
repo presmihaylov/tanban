@@ -2,7 +2,13 @@
 import { createCliRenderer } from "@opentui/core";
 
 import { KanbanApp } from "./src/app.ts";
-import { archiveExpired, loadState, saveState, stateFilePath } from "./src/storage.ts";
+import {
+  archiveExpired,
+  loadState,
+  migrateLegacyArchive,
+  saveState,
+  stateFilePath,
+} from "./src/storage.ts";
 import { theme } from "./src/theme.ts";
 
 async function main(): Promise<void> {
@@ -13,8 +19,12 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // v1 → v2: seed the history log from the old in-state archive before the
+  // first save rewrites state.json without the `archived` field. No-op after.
+  migrateLegacyArchive();
+
   const state = loadState();
-  // Retire done tasks older than the archive window before we draw anything.
+  // Prune done tasks older than the archive window before we draw anything.
   if (archiveExpired(state)) saveState(state);
 
   const renderer = await createCliRenderer({

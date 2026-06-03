@@ -8,9 +8,9 @@ import {
   type CliRenderer,
 } from "@opentui/core";
 
-import { daysUntilArchive, tasksByStatus, truncate } from "../tasks.ts";
+import { daysUntilArchive, tasksByStatus, truncate, wrapText } from "../tasks.ts";
 import { COLUMNS, theme } from "../theme.ts";
-import type { BoardState } from "../types.ts";
+import type { BoardState, Task } from "../types.ts";
 
 export interface BoardSelection {
   col: number;
@@ -28,8 +28,29 @@ function clearChildren(node: BoxRenderable): void {
 
 const hasDescription = (task: { description: string }) => task.description.trim().length > 0;
 
-/** Lines a card occupies: title only, or title + a description preview line. */
-const cardHeight = (task: { description: string }) => (hasDescription(task) ? 2 : 1);
+/** Archive-countdown badge for the title's first line, or "" when not due soon. */
+function archiveSuffix(task: Task): string {
+  const days = daysUntilArchive(task);
+  if (days === null || days > 2) return "";
+  return days <= 0 ? " ⌛<1d" : ` ⌛${days}d`;
+}
+
+/**
+ * The wrapped title lines (and the badge that shares the first line) for a card
+ * `width` cells wide. The bullet (2 cells) and badge are reserved on line one;
+ * wrapping uses that same width on every line so continuation lines stay inside
+ * the column. Shared by the height pass and the actual render so they agree.
+ */
+function titleLayout(task: Task, width: number): { lines: string[]; suffix: string } {
+  const suffix = archiveSuffix(task);
+  const titleWidth = Math.max(1, width - 2 - suffix.length);
+  return { lines: wrapText(task.title, titleWidth), suffix };
+}
+
+/** Lines a card occupies: every wrapped title line, plus a description preview line. */
+function cardHeight(task: Task, width: number): number {
+  return titleLayout(task, width).lines.length + (hasDescription(task) ? 1 : 0);
+}
 
 /**
  * Pick a contiguous window of cards that fits within `rows` lines and always
@@ -169,9 +190,9 @@ export class BoardView {
       COLUMNS[0]!.accent,
     )(`● ${count(0)} todo`)}   ${fg(COLUMNS[1]!.accent)(
       `● ${count(1)} doing`,
-    )}   ${fg(COLUMNS[2]!.accent)(`● ${count(2)} blocked`)}   ${fg(
+    )}   ${fg(COLUMNS[2]!.accent)(`● ${count(2)} review`)}   ${fg(
       COLUMNS[3]!.accent,
-    )(`● ${count(3)} done`)}    ${dim(`⌗ ${state.archived.length} archived`)}`;
+    )(`● ${count(3)} done`)}    ${dim("A history")}`;
   }
 
   private renderColumns(state: BoardState, sel: BoardSelection): void {
@@ -190,9 +211,9 @@ export class BoardView {
 
       const selRow = focused ? clamp(sel.row, 0, Math.max(0, list.length - 1)) : -1;
 
-      // Cards are 1 line (title only) or 2 lines (title + description preview),
-      // so window by accumulated line height rather than card count.
-      const heights = list.map((task) => cardHeight(task));
+      // Cards are variable height (wrapped title lines + an optional description
+      // preview), so window by accumulated line height rather than card count.
+      const heights = list.map((task) => cardHeight(task, innerWidth));
       const { start, end } = windowByHeight(heights, rows, selRow);
 
       const above = start;
@@ -220,11 +241,8 @@ export class BoardView {
     const hasDesc = hasDescription(task);
     const bullet = hasDesc ? "●" : "○";
 
-    const days = daysUntilArchive(task);
-    let suffix = "";
-    if (days !== null && days <= 2) suffix = days <= 0 ? " ⌛<1d" : ` ⌛${days}d`;
-
-    const label = truncate(task.title, Math.max(1, width - 2 - suffix.length));
+    const { lines, suffix } = titleLayout(task, width);
+    const titleHeight = lines.length;
 
     const cardBg = selected
       ? columnFocused
@@ -239,31 +257,40 @@ export class BoardView {
       : theme.descDim;
 
     const card = new BoxRenderable(this.renderer, {
-      height: hasDesc ? 2 : 1,
+      height: titleHeight + (hasDesc ? 1 : 0),
       flexShrink: 0,
       flexDirection: "column",
       backgroundColor: cardBg,
     });
 
     const titleRow = new BoxRenderable(this.renderer, {
-      height: 1,
+      height: titleHeight,
       flexShrink: 0,
       flexDirection: "row",
       backgroundColor: cardBg,
     });
+    // The bullet sits on the first line; the title's wrapped lines stack to its
+    // right, so continuation lines line up under the title rather than the bullet.
+    const bulletText = `${bullet} `;
     titleRow.add(
       new TextRenderable(this.renderer, {
-        content: `${bullet} `,
+        // Selected cards get bold text on the grey-white bar so they stand out.
+        content: selected ? t`${bold(fg(theme.selectionFg)(bulletText))}` : bulletText,
         fg: selected ? theme.selectionFg : accent,
         bg: cardBg,
         flexShrink: 0,
       }),
     );
+    const titleText = lines.join("\n");
     titleRow.add(
       new TextRenderable(this.renderer, {
-        content: label,
+        // Pre-wrapped in JS (wrapMode "none") so the rendered line count matches
+        // what windowByHeight reserved for this card.
+        content: selected ? t`${bold(fg(fgColor)(titleText))}` : titleText,
+        wrapMode: "none",
         fg: fgColor,
         bg: cardBg,
+        height: titleHeight,
         flexGrow: 1,
       }),
     );
