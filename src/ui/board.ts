@@ -2,7 +2,6 @@ import {
   BoxRenderable,
   TextRenderable,
   bold,
-  dim,
   fg,
   t,
   type CliRenderer,
@@ -101,8 +100,6 @@ export class BoardView {
       content: "",
       height: 1,
       flexShrink: 0,
-      paddingLeft: 1,
-      paddingRight: 1,
     });
 
     this.body = new BoxRenderable(renderer, {
@@ -172,7 +169,7 @@ export class BoardView {
   }
 
   render(state: BoardState, sel: BoardSelection, footerText: string): void {
-    this.renderHeader(state);
+    this.renderHeader();
     this.renderColumns(state, sel);
     this.footer.content = footerText;
     this.renderer.requestRender();
@@ -183,16 +180,11 @@ export class BoardView {
     this.renderer.requestRender();
   }
 
-  private renderHeader(state: BoardState): void {
-    const count = (i: number) =>
-      tasksByStatus(state, COLUMNS[i]!.status).length;
-    this.header.content = t` ${bold(fg(theme.brand)("TANBAN"))}    ${fg(
-      COLUMNS[0]!.accent,
-    )(`● ${count(0)} todo`)}   ${fg(COLUMNS[1]!.accent)(
-      `● ${count(1)} doing`,
-    )}   ${fg(COLUMNS[2]!.accent)(`● ${count(2)} review`)}   ${fg(
-      COLUMNS[3]!.accent,
-    )(`● ${count(3)} done`)}    ${dim("A history")}`;
+  private renderHeader(): void {
+    // Just the brand, centred, in the Done column's off-white.
+    const label = "TANBAN";
+    const pad = Math.max(0, Math.floor((this.renderer.width - label.length) / 2));
+    this.header.content = t`${" ".repeat(pad)}${bold(fg(COLUMNS[3]!.accent)(label))}`;
   }
 
   private renderColumns(state: BoardState, sel: BoardSelection): void {
