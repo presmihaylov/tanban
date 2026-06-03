@@ -5,7 +5,7 @@ import type { CliRenderer, KeyEvent } from "@opentui/core";
 import { appendHistory, archiveExpired, loadHistory, saveState } from "./storage.ts";
 import { startOfDay, tasksByStatus, truncate } from "./tasks.ts";
 import { COLUMNS } from "./theme.ts";
-import { STATUSES, type BoardState, type Status, type Task } from "./types.ts";
+import type { BoardState, Status, Task } from "./types.ts";
 import { BoardView, type BoardSelection } from "./ui/board.ts";
 import { ConfirmView } from "./ui/confirm.ts";
 import { DetailView } from "./ui/detail.ts";
@@ -21,7 +21,7 @@ const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v
 const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 
 const BOARD_HINTS =
-  "a add · e edit · ⏎ view · d delete · arrows/hjkl navigate · ⇧+arrows (or H/L/J/K) move the task · Space advance · A history · ? help · q quit";
+  "a add · e edit · ⏎ view · d delete · arrows/hjkl navigate · ⇧+arrows (or H/L/J/K) move the task · A history · ? help · q quit";
 
 /**
  * Top-level controller: owns the board state, the current mode, and a single
@@ -188,7 +188,6 @@ export class KanbanApp {
     if (n === "e") return this.handled(key, () => this.openForm("edit"));
     if (n === "return") return this.handled(key, () => this.openDetail());
     if (n === "d") return this.handled(key, () => this.openConfirmDelete());
-    if (n === "space") return this.handled(key, () => this.advanceStatus());
     if (n === "?") return this.handled(key, () => this.openHelp());
     if (n === "q") return this.handled(key, () => this.quit());
   }
@@ -248,17 +247,6 @@ export class KanbanApp {
     const target = clamp(this.sel.col + delta, 0, COLUMNS.length - 1);
     if (target === this.sel.col) return;
     this.applyStatus(task, this.columnStatus(target));
-    this.persist();
-    this.selectTask(task.id);
-    this.renderBoard();
-  }
-
-  private advanceStatus(): void {
-    const task = this.selectedTask();
-    if (!task) return;
-    const idx = STATUSES.indexOf(task.status);
-    const next = STATUSES[(idx + 1) % STATUSES.length]!;
-    this.applyStatus(task, next);
     this.persist();
     this.selectTask(task.id);
     this.renderBoard();

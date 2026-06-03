@@ -9,7 +9,6 @@ export const BINDINGS: ReadonlyArray<readonly [string, string]> = [
   ["g / G", "Jump to first / last card"],
   ["⇧←/→  H/L", "Move task to prev / next column"],
   ["⇧↑/↓  K/J", "Reorder task within column"],
-  ["Space", "Advance status (wraps round)"],
   ["a / n", "Add a new task"],
   ["e", "Edit selected task"],
   ["Enter", "View task details"],

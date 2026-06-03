@@ -145,28 +145,6 @@ test("moves a task across columns and stamps completion", async () => {
   expect(state.tasks[0]!.completedAt).toBeUndefined();
 });
 
-test("Space advances status and wraps round", async () => {
-  const state = emptyState();
-  state.tasks.push({
-    id: "t1",
-    title: "Cycle me",
-    description: "",
-    status: "done",
-    completedAt: 5,
-    createdAt: 1,
-    updatedAt: 1,
-  });
-  // Selection starts on the todo column; navigate to done first.
-  const { mockInput, flush } = await setup(state);
-  mockInput.pressKey("l");
-  mockInput.pressKey("l");
-  mockInput.pressKey("l"); // now on done column where the task lives
-  await flush();
-  mockInput.pressKey(" "); // space: done -> todo (wrap)
-  await flush();
-  expect(state.tasks[0]!.status).toBe("todo");
-});
-
 test("Esc cancels the form without creating a task", async () => {
   const { mockInput, flush, captureCharFrame, state } = await setup();
   mockInput.pressKey("a");
