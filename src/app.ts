@@ -21,7 +21,7 @@ const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v
 const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 
 const BOARD_HINTS =
-  "a add · e edit · ⏎ view · d delete · arrows/hjkl navigate · ⇧+arrows/hjkl move the task · A history · ? help · q quit";
+  "a add · e edit · ⏎ view · d delete · arrows/hjkl navigate · ⇧+arrows/hjkl move · A history · ? help · q quit";
 
 /**
  * Top-level controller: owns the board state, the current mode, and a single
