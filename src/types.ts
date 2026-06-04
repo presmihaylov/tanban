@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 /** The four kanban columns, in board order (left → right). */
 export const STATUSES = ["todo", "in_progress", "blocked", "done"] as const;
 
@@ -16,11 +18,24 @@ export interface Task {
   completedAt?: number;
 }
 
+/**
+ * One named board ("dimension"). Each board is an independent kanban with its
+ * own task list; the app shows one at a time and cycles between them with Tab.
+ */
+export interface Board {
+  id: string;
+  name: string;
+  /** Source of truth for both membership (status) and ordering (array order). */
+  tasks: Task[];
+}
+
 export interface BoardState {
   /** Bumped when the on-disk shape changes so we can migrate. */
   version: number;
-  /** Source of truth for both membership (status) and ordering (array order). */
-  tasks: Task[];
+  /** At least one board, always. */
+  boards: Board[];
+  /** Which board is currently shown. Falls back to the first board if stale. */
+  activeBoardId: string;
 }
 
 /**
@@ -30,6 +45,8 @@ export interface BoardState {
  */
 export interface HistoryEntry {
   taskId: string;
+  /** Board the task was completed on. Absent on pre-multi-board (legacy) entries. */
+  boardId?: string;
   /** Title/description captured at completion time (a point-in-time snapshot). */
   title: string;
   description: string;
@@ -37,8 +54,16 @@ export interface HistoryEntry {
   completedAt: number;
 }
 
-export const CURRENT_VERSION = 2;
+export const CURRENT_VERSION = 3;
+
+/** Default name given to a board created from scratch or by migration. */
+export const DEFAULT_BOARD_NAME = "main";
+
+export function newBoard(name: string = DEFAULT_BOARD_NAME): Board {
+  return { id: randomUUID(), name, tasks: [] };
+}
 
 export function emptyState(): BoardState {
-  return { version: CURRENT_VERSION, tasks: [] };
+  const board = newBoard();
+  return { version: CURRENT_VERSION, boards: [board], activeBoardId: board.id };
 }

@@ -1,5 +1,6 @@
 import {
   BoxRenderable,
+  StyledText,
   TextRenderable,
   bold,
   fg,
@@ -9,7 +10,10 @@ import {
 
 import { daysUntilArchive, tasksByStatus, truncate, wrapText } from "../tasks.ts";
 import { COLUMNS, theme } from "../theme.ts";
-import type { BoardState, Task } from "../types.ts";
+import type { Board, Task } from "../types.ts";
+
+/** One styled run of text (what `fg(...)(...)`, `bold(...)`, etc. return). */
+type Chunk = ReturnType<typeof bold>;
 
 export interface BoardSelection {
   col: number;
@@ -168,9 +172,15 @@ export class BoardView {
     return Math.max(6, perColumn - 4);
   }
 
-  render(state: BoardState, sel: BoardSelection, footerText: string): void {
-    this.renderHeader();
-    this.renderColumns(state, sel);
+  render(
+    boards: Board[],
+    activeId: string,
+    sel: BoardSelection,
+    footerText: string,
+  ): void {
+    const active = boards.find((b) => b.id === activeId) ?? boards[0]!;
+    this.renderHeader(boards, activeId);
+    this.renderColumns(active, sel);
     this.footer.content = footerText;
     this.renderer.requestRender();
   }
@@ -180,26 +190,42 @@ export class BoardView {
     this.renderer.requestRender();
   }
 
-  private renderHeader(): void {
-    // Just the brand, centred, in the Done column's off-white.
-    const label = "TANBAN";
-    const pad = Math.max(0, Math.floor((this.renderer.width - label.length) / 2));
-    this.header.content = t`${" ".repeat(pad)}${bold(fg(COLUMNS[3]!.accent)(label))}`;
+  /**
+   * The board names as a centred tab strip: the active board bold in the Done
+   * off-white, the rest dimmed. With a single board it reads as just its name.
+   */
+  private renderHeader(boards: Board[], activeId: string): void {
+    const accent = COLUMNS[3]!.accent;
+    const sep = "   ";
+    const chunks: Chunk[] = [];
+    let visible = 0;
+    boards.forEach((board, i) => {
+      if (i > 0) {
+        chunks.push(fg(theme.textDim)(sep));
+        visible += sep.length;
+      }
+      visible += board.name.length;
+      chunks.push(
+        board.id === activeId ? bold(fg(accent)(board.name)) : fg(theme.textDim)(board.name),
+      );
+    });
+    const pad = Math.max(0, Math.floor((this.renderer.width - visible) / 2));
+    this.header.content = new StyledText([fg(theme.textDim)(" ".repeat(pad)), ...chunks]);
   }
 
-  private renderColumns(state: BoardState, sel: BoardSelection): void {
+  private renderColumns(board: Board, sel: BoardSelection): void {
     const rows = this.contentRows();
     const innerWidth = this.columnInnerWidth();
 
     COLUMNS.forEach((col, ci) => {
-      const box = this.columnBoxes[ci]!;
+      const colBox = this.columnBoxes[ci]!;
       const inner = this.columnBodies[ci]!;
       clearChildren(inner);
 
-      const list = tasksByStatus(state, col.status);
+      const list = tasksByStatus(board, col.status);
       const focused = sel.col === ci;
-      box.borderColor = focused ? col.accent : theme.border;
-      box.title = list.length > 0 ? `${col.title} · ${list.length}` : col.title;
+      colBox.borderColor = focused ? col.accent : theme.border;
+      colBox.title = list.length > 0 ? `${col.title} · ${list.length}` : col.title;
 
       const selRow = focused ? clamp(sel.row, 0, Math.max(0, list.length - 1)) : -1;
 
@@ -210,11 +236,11 @@ export class BoardView {
 
       const above = start;
       const below = list.length - end;
-      box.bottomTitle =
+      colBox.bottomTitle =
         above > 0 || below > 0
           ? `${above > 0 ? `↑${above} ` : ""}${below > 0 ? `↓${below}` : ""}`.trim()
           : undefined;
-      box.bottomTitleAlignment = "right";
+      colBox.bottomTitleAlignment = "right";
 
       for (let i = start; i < end; i++) {
         const task = list[i]!;
@@ -224,7 +250,7 @@ export class BoardView {
   }
 
   private makeCard(
-    task: BoardState["tasks"][number],
+    task: Task,
     selected: boolean,
     columnFocused: boolean,
     accent: string,

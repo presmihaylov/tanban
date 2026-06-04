@@ -2,18 +2,27 @@ import { randomUUID } from "node:crypto";
 
 import type { CliRenderer, KeyEvent } from "@opentui/core";
 
-import { appendHistory, archiveExpired, loadHistory, saveState } from "./storage.ts";
+import {
+  appendHistory,
+  archiveExpired,
+  loadHistory,
+  removeBoardHistory,
+  saveState,
+} from "./storage.ts";
 import { startOfDay, tasksByStatus, truncate } from "./tasks.ts";
 import { COLUMNS } from "./theme.ts";
-import type { BoardState, Status, Task } from "./types.ts";
+import { newBoard, type Board, type BoardState, type Status, type Task } from "./types.ts";
 import { BoardView, type BoardSelection } from "./ui/board.ts";
 import { ConfirmView } from "./ui/confirm.ts";
 import { DetailView } from "./ui/detail.ts";
 import { TaskForm } from "./ui/form.ts";
 import { HelpView } from "./ui/help.ts";
 import { HistoryView } from "./ui/history.ts";
+import { PromptView } from "./ui/prompt.ts";
 
-type Mode = "board" | "form" | "detail" | "confirm" | "help" | "history";
+type Mode = "board" | "form" | "detail" | "confirm" | "help" | "history" | "prompt";
+type ConfirmAction = "deleteTask" | "deleteBoard";
+type PromptAction = "newBoard" | "renameBoard";
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
@@ -21,7 +30,7 @@ const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v
 const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 
 const BOARD_HINTS =
-  "a add · e edit · ⏎ view · d delete · arrows/hjkl navigate · ⇧+arrows/hjkl move · A history · ? help · q quit";
+  "a add · e edit · ⏎ view · d delete · ⇧+arrows/hjkl move · ⇥ board · b new · r rename · ⇧D del board · A history · ? help · q quit";
 
 /**
  * Top-level controller: owns the board state, the current mode, and a single
@@ -40,10 +49,13 @@ export class KanbanApp {
   private help: HelpView | null = null;
   private history: HistoryView | null = null;
   private confirm: ConfirmView | null = null;
+  private prompt: PromptView | null = null;
 
   private formMode: "add" | "edit" = "add";
   private formTaskId: string | null = null;
   private contextTaskId: string | null = null; // task targeted by detail / confirm
+  private confirmAction: ConfirmAction = "deleteTask";
+  private promptAction: PromptAction = "newBoard";
 
   private lastSweepDay: number;
 
@@ -75,6 +87,21 @@ export class KanbanApp {
     if (this.mode === "board") this.renderBoard();
   }
 
+  // ------------------------------------------------------------------- boards
+
+  /** The board currently shown. Falls back to the first board if the id is stale. */
+  private activeBoard(): Board {
+    return this.state.boards.find((b) => b.id === this.state.activeBoardId) ?? this.state.boards[0]!;
+  }
+
+  /**
+   * Board that owns legacy (pre-multi-board) history entries — the first board,
+   * which is the one the old single task list migrated into.
+   */
+  private defaultBoardId(): string {
+    return this.state.boards[0]!.id;
+  }
+
   // ---------------------------------------------------------------- selection
 
   private columnStatus(col: number): Status {
@@ -82,7 +109,7 @@ export class KanbanApp {
   }
 
   private currentList(): Task[] {
-    return tasksByStatus(this.state, this.columnStatus(this.sel.col));
+    return tasksByStatus(this.activeBoard(), this.columnStatus(this.sel.col));
   }
 
   private selectedTask(): Task | undefined {
@@ -97,8 +124,9 @@ export class KanbanApp {
   }
 
   private selectTask(id: string): void {
+    const board = this.activeBoard();
     for (let c = 0; c < COLUMNS.length; c++) {
-      const idx = tasksByStatus(this.state, this.columnStatus(c)).findIndex((t) => t.id === id);
+      const idx = tasksByStatus(board, this.columnStatus(c)).findIndex((t) => t.id === id);
       if (idx >= 0) {
         this.sel = { col: c, row: idx };
         return;
@@ -114,7 +142,7 @@ export class KanbanApp {
       this.mode === "board"
         ? truncate(BOARD_HINTS, Math.max(0, this.renderer.width - 2))
         : "";
-    this.board.render(this.state, this.sel, footer);
+    this.board.render(this.state.boards, this.state.activeBoardId, this.sel, footer);
   }
 
   private persist(): void {
@@ -146,6 +174,9 @@ export class KanbanApp {
       case "history":
         this.onHistoryKey(key);
         break;
+      case "prompt":
+        this.onPromptKey(key);
+        break;
     }
   }
 
@@ -168,6 +199,9 @@ export class KanbanApp {
 
     if (key.ctrl) return; // leave Ctrl combos (e.g. Ctrl+C) to the renderer
 
+    // Switch boards (cycle). Tab forward, Shift+Tab back.
+    if (n === "tab") return this.handled(key, () => this.cycleBoard(shift ? -1 : 1));
+
     // Move a task between columns (Shift + horizontal).
     if (shift && (n === "left" || n === "h")) return this.handled(key, () => this.moveAcross(-1));
     if (shift && (n === "right" || n === "l")) return this.handled(key, () => this.moveAcross(1));
@@ -187,7 +221,10 @@ export class KanbanApp {
     if (n === "a" || n === "n") return this.handled(key, () => this.openForm("add"));
     if (n === "e") return this.handled(key, () => this.openForm("edit"));
     if (n === "return") return this.handled(key, () => this.openDetail());
+    if (n === "d" && shift) return this.handled(key, () => this.openConfirmDeleteBoard());
     if (n === "d") return this.handled(key, () => this.openConfirmDelete());
+    if (n === "b") return this.handled(key, () => this.openPrompt("newBoard"));
+    if (n === "r") return this.handled(key, () => this.openPrompt("renameBoard"));
     if (n === "?") return this.handled(key, () => this.openHelp());
     if (n === "q") return this.handled(key, () => this.quit());
   }
@@ -198,6 +235,19 @@ export class KanbanApp {
   }
 
   // ------------------------------------------------------------ board actions
+
+  /** Cycle to the next/previous board, wrapping around. */
+  private cycleBoard(delta: number): void {
+    const boards = this.state.boards;
+    if (boards.length <= 1) return;
+    const idx = boards.findIndex((b) => b.id === this.state.activeBoardId);
+    const next = (idx + delta + boards.length) % boards.length;
+    this.state.activeBoardId = boards[next]!.id;
+    this.sel = { col: this.sel.col, row: 0 };
+    this.persist();
+    this.normalizeSelection();
+    this.renderBoard();
+  }
 
   private moveColumn(delta: number): void {
     this.sel.col = clamp(this.sel.col + delta, 0, COLUMNS.length - 1);
@@ -235,6 +285,7 @@ export class KanbanApp {
   private recordCompletion(task: Task): void {
     appendHistory({
       taskId: task.id,
+      boardId: this.activeBoard().id,
       title: task.title,
       description: task.description,
       completedAt: task.completedAt ?? Date.now(),
@@ -256,21 +307,22 @@ export class KanbanApp {
     const task = this.selectedTask();
     if (!task) return;
     const status = task.status;
-    // Indices into state.tasks of every task sharing this column, in order.
+    const tasks = this.activeBoard().tasks;
+    // Indices into the board's tasks of every task sharing this column, in order.
     const indices: number[] = [];
-    this.state.tasks.forEach((t, i) => {
+    tasks.forEach((t, i) => {
       if (t.status === status) indices.push(i);
     });
-    const pos = indices.findIndex((i) => this.state.tasks[i]!.id === task.id);
+    const pos = indices.findIndex((i) => tasks[i]!.id === task.id);
     const targetPos = pos + delta;
     if (targetPos < 0 || targetPos >= indices.length) return;
 
     const a = indices[pos]!;
     const b = indices[targetPos]!;
-    const ta = this.state.tasks[a]!;
-    const tb = this.state.tasks[b]!;
-    this.state.tasks[a] = tb;
-    this.state.tasks[b] = ta;
+    const ta = tasks[a]!;
+    const tb = tasks[b]!;
+    tasks[a] = tb;
+    tasks[b] = ta;
 
     this.sel.row = targetPos;
     this.persist();
@@ -328,8 +380,9 @@ export class KanbanApp {
       return;
     }
 
+    const board = this.activeBoard();
     if (this.formMode === "edit" && this.formTaskId) {
-      const task = this.state.tasks.find((t) => t.id === this.formTaskId);
+      const task = board.tasks.find((t) => t.id === this.formTaskId);
       if (task) {
         task.title = title;
         task.description = description;
@@ -350,7 +403,7 @@ export class KanbanApp {
         task.completedAt = now;
         this.recordCompletion(task);
       }
-      this.state.tasks.push(task);
+      board.tasks.push(task);
       this.selectTask(task.id);
     }
 
@@ -408,6 +461,7 @@ export class KanbanApp {
     const task = this.selectedTask();
     if (!task) return;
     this.contextTaskId = task.id;
+    this.confirmAction = "deleteTask";
     this.confirm = new ConfirmView(this.renderer, {
       message: "Delete this task?",
       detail: task.title,
@@ -415,17 +469,59 @@ export class KanbanApp {
     this.mode = "confirm";
   }
 
+  private openConfirmDeleteBoard(): void {
+    // The last board can't be deleted — there's always at least one.
+    if (this.state.boards.length <= 1) {
+      this.board.setFooter(
+        truncate("Can't delete the last board.", Math.max(0, this.renderer.width - 2)),
+      );
+      return;
+    }
+    const board = this.activeBoard();
+    const count = board.tasks.length;
+    this.confirmAction = "deleteBoard";
+    this.confirm = new ConfirmView(this.renderer, {
+      message: `Delete board “${board.name}”?`,
+      detail: count > 0 ? `${count} task${count === 1 ? "" : "s"} will be removed` : "It's empty",
+    });
+    this.mode = "confirm";
+  }
+
   private onConfirmKey(key: KeyEvent): void {
     const n = key.name ?? "";
-    if (n === "y") return this.handled(key, () => this.performDelete());
+    if (n === "y") return this.handled(key, () => this.performConfirm());
     if (n === "n" || n === "escape") return this.handled(key, () => this.closeConfirm());
+  }
+
+  private performConfirm(): void {
+    if (this.confirmAction === "deleteBoard") return this.performDeleteBoard();
+    this.performDelete();
   }
 
   private performDelete(): void {
     if (this.contextTaskId) {
-      this.state.tasks = this.state.tasks.filter((t) => t.id !== this.contextTaskId);
+      const board = this.activeBoard();
+      board.tasks = board.tasks.filter((t) => t.id !== this.contextTaskId);
       this.persist();
     }
+    this.closeConfirm();
+  }
+
+  private performDeleteBoard(): void {
+    const boards = this.state.boards;
+    if (boards.length <= 1) return this.closeConfirm();
+    const removedId = this.activeBoard().id;
+    const defaultId = this.defaultBoardId();
+    const idx = boards.findIndex((b) => b.id === removedId);
+
+    this.state.boards = boards.filter((b) => b.id !== removedId);
+    // Land on the neighbour that takes the removed board's slot (or the new last).
+    const nextIdx = clamp(idx, 0, this.state.boards.length - 1);
+    this.state.activeBoardId = this.state.boards[nextIdx]!.id;
+    this.sel = { col: 0, row: 0 };
+
+    removeBoardHistory(removedId, defaultId);
+    this.persist();
     this.closeConfirm();
   }
 
@@ -452,14 +548,67 @@ export class KanbanApp {
   }
 
   private openHistory(): void {
-    const boardDone = this.state.tasks.filter((t) => t.status === "done");
-    this.history = new HistoryView(this.renderer, boardDone, loadHistory());
+    const board = this.activeBoard();
+    const defaultId = this.defaultBoardId();
+    const boardDone = board.tasks.filter((t) => t.status === "done");
+    // Scope the durable log to this board; legacy entries belong to the first board.
+    const log = loadHistory().filter((e) => (e.boardId ?? defaultId) === board.id);
+    this.history = new HistoryView(this.renderer, boardDone, log);
     this.mode = "history";
   }
 
   private closeHistory(): void {
     this.history?.destroy();
     this.history = null;
+    this.mode = "board";
+    this.renderBoard();
+  }
+
+  // ------------------------------------------------------------------ prompt
+
+  private openPrompt(action: PromptAction): void {
+    this.promptAction = action;
+    const newBoardPrompt = action === "newBoard";
+    this.prompt = new PromptView(this.renderer, {
+      heading: newBoardPrompt ? " New Board " : " Rename Board ",
+      value: newBoardPrompt ? "" : this.activeBoard().name,
+      placeholder: "Board name (e.g. work, side)",
+    });
+    this.mode = "prompt";
+  }
+
+  private onPromptKey(key: KeyEvent): void {
+    if (!this.prompt) return;
+    const n = key.name ?? "";
+    if (n === "escape") return this.handled(key, () => this.closePrompt());
+    if (n === "return") return this.handled(key, () => this.submitPrompt());
+    // Anything else flows through to the focused input.
+  }
+
+  private submitPrompt(): void {
+    if (!this.prompt) return;
+    const name = this.prompt.value();
+    if (name.length === 0) {
+      this.prompt.setError("Name is required");
+      return;
+    }
+
+    if (this.promptAction === "newBoard") {
+      const board = newBoard(name);
+      this.state.boards.push(board);
+      this.state.activeBoardId = board.id;
+      this.sel = { col: 0, row: 0 };
+    } else {
+      this.activeBoard().name = name;
+    }
+
+    this.persist();
+    this.closePrompt();
+  }
+
+  private closePrompt(): void {
+    this.prompt?.destroy();
+    this.prompt = null;
     this.mode = "board";
     this.renderBoard();
   }

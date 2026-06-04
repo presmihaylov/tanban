@@ -1,12 +1,12 @@
 import { ARCHIVE_AFTER_MS } from "./storage.ts";
-import type { BoardState, HistoryEntry, Status, Task } from "./types.ts";
+import type { Board, HistoryEntry, Status, Task } from "./types.ts";
 
 /**
- * Tasks in a column, preserving the order they appear in `state.tasks`.
+ * Tasks in a board's column, preserving the order they appear in `board.tasks`.
  * Array order is the single source of truth for within-column ordering.
  */
-export function tasksByStatus(state: BoardState, status: Status): Task[] {
-  return state.tasks.filter((t) => t.status === status);
+export function tasksByStatus(board: Board, status: Status): Task[] {
+  return board.tasks.filter((t) => t.status === status);
 }
 
 /** Whole days left before a done task is archived, or null if not applicable. */

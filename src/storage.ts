@@ -11,8 +11,11 @@ import { dirname, join } from "node:path";
 
 import {
   CURRENT_VERSION,
+  DEFAULT_BOARD_NAME,
   emptyState,
+  newBoard,
   STATUSES,
+  type Board,
   type BoardState,
   type HistoryEntry,
   type Status,
@@ -74,26 +77,62 @@ function parseTask(raw: unknown): Task | null {
   return task;
 }
 
-function parseState(text: string): BoardState {
-  const data = JSON.parse(text) as Record<string, unknown>;
-  const tasks = Array.isArray(data.tasks)
-    ? data.tasks.map(parseTask).filter((t): t is Task => t !== null)
-    : [];
-  return { version: CURRENT_VERSION, tasks };
+function parseTasks(raw: unknown): Task[] {
+  return Array.isArray(raw) ? raw.map(parseTask).filter((t): t is Task => t !== null) : [];
+}
+
+/** Defensively coerce an unknown JSON value into a Board, or drop it. */
+function parseBoard(raw: unknown): Board | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  const board = newBoard(
+    typeof r.name === "string" && r.name.trim().length > 0 ? r.name.trim() : DEFAULT_BOARD_NAME,
+  );
+  if (typeof r.id === "string" && r.id.length > 0) board.id = r.id;
+  board.tasks = parseTasks(r.tasks);
+  return board;
 }
 
 /**
- * Prune done tasks past the archive window off the board. Their completion is
+ * Parse on-disk JSON into the current `BoardState` shape, migrating older
+ * layouts on the way: v1/v2 stored a flat `tasks` array, which becomes a single
+ * "main" board here. An empty/garbage file yields a fresh single-board state.
+ */
+function parseState(text: string): BoardState {
+  const data = JSON.parse(text) as Record<string, unknown>;
+
+  if (Array.isArray(data.boards)) {
+    const boards = data.boards.map(parseBoard).filter((b): b is Board => b !== null);
+    if (boards.length === 0) return emptyState();
+    const active =
+      typeof data.activeBoardId === "string" && boards.some((b) => b.id === data.activeBoardId)
+        ? data.activeBoardId
+        : boards[0]!.id;
+    return { version: CURRENT_VERSION, boards, activeBoardId: active };
+  }
+
+  // v1/v2: a single flat task list. Wrap it in one default board.
+  const board = newBoard();
+  board.tasks = parseTasks(data.tasks);
+  return { version: CURRENT_VERSION, boards: [board], activeBoardId: board.id };
+}
+
+/**
+ * Prune done tasks past the archive window off every board. Their completion is
  * already in the history log, so they're simply dropped from `tasks` here.
  * Returns true if anything changed (so the caller can persist).
  */
 export function archiveExpired(state: BoardState, now: number = Date.now()): boolean {
   const cutoff = now - ARCHIVE_AFTER_MS;
-  const before = state.tasks.length;
-  state.tasks = state.tasks.filter(
-    (t) => !(t.status === "done" && (t.completedAt ?? t.updatedAt) <= cutoff),
-  );
-  return state.tasks.length !== before;
+  let changed = false;
+  for (const board of state.boards) {
+    const before = board.tasks.length;
+    board.tasks = board.tasks.filter(
+      (t) => !(t.status === "done" && (t.completedAt ?? t.updatedAt) <= cutoff),
+    );
+    if (board.tasks.length !== before) changed = true;
+  }
+  return changed;
 }
 
 /** Load state from disk (returns an empty board if the file is missing or corrupt). */
@@ -128,12 +167,14 @@ function parseHistoryEntry(raw: unknown): HistoryEntry | null {
   const r = raw as Record<string, unknown>;
   if (typeof r.taskId !== "string" || typeof r.title !== "string") return null;
   if (typeof r.completedAt !== "number") return null;
-  return {
+  const entry: HistoryEntry = {
     taskId: r.taskId,
     title: r.title,
     description: typeof r.description === "string" ? r.description : "",
     completedAt: r.completedAt,
   };
+  if (typeof r.boardId === "string") entry.boardId = r.boardId;
+  return entry;
 }
 
 /** Append one completion record to the log (creates the file/dir on demand). */
@@ -163,6 +204,27 @@ export function loadHistory(path: string = historyFilePath()): HistoryEntry[] {
     }
   }
   return entries;
+}
+
+/**
+ * Drop every completion record belonging to a deleted board and rewrite the log
+ * (atomically). Legacy entries with no `boardId` are attributed to
+ * `defaultBoardId` (the first board), so deleting that board clears them too.
+ * No-op when nothing matches, so the file is only rewritten on a real deletion.
+ */
+export function removeBoardHistory(
+  boardId: string,
+  defaultBoardId: string,
+  path: string = historyFilePath(),
+): void {
+  const all = loadHistory(path);
+  const kept = all.filter((e) => (e.boardId ?? defaultBoardId) !== boardId);
+  if (kept.length === all.length) return;
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = `${path}.tmp-${process.pid}`;
+  const body = kept.length > 0 ? `${kept.map((e) => JSON.stringify(e)).join("\n")}\n` : "";
+  writeFileSync(tmp, body, "utf8");
+  renameSync(tmp, path);
 }
 
 /**

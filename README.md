@@ -6,17 +6,21 @@ A fast, keyboard-driven **kanban board for your terminal** (a tiny play on
 with [Bun](https://bun.sh) and [OpenTUI](https://opentui.com).
 
 ```
- TANBAN    ● 2 todo   ● 1 doing   ● 1 blocked   ● 2 done    ⌗ 0 archived
- ╭────────TODO · 2────────╮ ╭─────IN PROGRESS · 1─────╮ ╭──────BLOCKED · 1───────╮ ╭────────DONE · 2────────╮
+                                  work   side   personal
+ ╭────────TODO · 2────────╮ ╭─────IN PROGRESS · 1─────╮ ╭─────IN REVIEW · 1──────╮ ╭────────DONE · 2────────╮
  │ ● Write the README     │ │ ● Refactor key handler  │ │ ○ Fix flicker on resi… │ │ ● Ship v0.1       ⌛1d │
- │ ○ Add archive view     │ │                         │ │                        │ │ ○ Set up CI            │
+ │ ○ Add boards view      │ │                         │ │                        │ │ ○ Set up CI            │
  ╰────────────────────────╯ ╰─────────────────────────╯ ╰────────────────────────╯ ╰────────────────────────╯
- a add · e edit · ⏎ view · d delete · arrows/hjkl navigate · ⇧+arrows (or H/L/J/K) move the task · Space advance · A archive · ? help · q quit
+ a add · e edit · ⏎ view · d delete · ⇧+arrows/hjkl move · ⇥ board · b new · r rename · ⇧D del board · A history · ? help · q quit
 ```
 
 ## Features
 
-- Four columns: **TODO**, **In Progress**, **Blocked**, **Done**.
+- Four columns: **TODO**, **In Progress**, **In Review**, **Done**.
+- **Multiple boards** ("dimensions"): keep a separate board for work, side
+  projects, etc. Cycle between them with `Tab`; the header shows their names
+  with the active one highlighted. Add (`b`), rename (`r`), and delete (`⇧D`)
+  boards on the fly. Each board has its own tasks and completion history.
 - Each task has a required **title** and an optional **description**.
 - Fully keyboard-driven — every action has a binding (see below).
 - **Sessions persist**: state lives in a JSON file under `~/.config` and is
@@ -68,12 +72,15 @@ bun link               # from this directory; creates a `tanban` shim in ~/.bun/
 | `g` / `G` | Jump to first / last card |
 | `⇧←` `⇧→` / `H` `L` | Move task to previous / next column |
 | `⇧↑` `⇧↓` / `K` `J` | Reorder task within its column |
-| `Space` | Advance status (wraps Done → TODO) |
 | `a` / `n` | Add a new task (in the focused column) |
 | `e` | Edit selected task |
 | `Enter` | View task details |
 | `d` | Delete selected task (asks to confirm) |
-| `A` | Toggle the archived-tasks view |
+| `Tab` / `⇧Tab` | Switch to the next / previous board |
+| `b` | New board (prompts for a name) |
+| `r` | Rename the current board |
+| `⇧D` | Delete the current board (asks to confirm) |
+| `A` | Toggle the completed-work history view |
 | `?` | Toggle the help overlay |
 | `q` / `Ctrl+C` | Quit |
 
